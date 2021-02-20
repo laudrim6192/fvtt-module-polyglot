@@ -1,3 +1,11 @@
+const keyState = {};
+
+window.addEventListener('keyup', (e) => keyState[e.key] = false);
+window.addEventListener('keydown', (e) => {setTimeout(function() {keyState[e.key] = false}, 1000); keyState[e.key] = true});
+const is_key_down = (() => {
+  return (key) => keyState.hasOwnProperty(key) && keyState[key] || false;
+})();
+					   
 class PolyGlot {
 
 	constructor() {
@@ -260,7 +268,7 @@ class PolyGlot {
 	}
 
 	preCreateChatMessage(data, options, userId) {
-		if (data.type == CONST.CHAT_MESSAGE_TYPES.IC || (this.allowOOC && this._isMessageTypeOOC(data.type) && game.user.isGM)) {
+		if (!is_key_down("Alt") && (data.type == CONST.CHAT_MESSAGE_TYPES.IC || (this.allowOOC && this._isMessageTypeOOC(data.type) && game.user.isGM))) {
 			let lang = ui.chat.element.find("select[name=polyglot-language]").val()
 			if (lang != "")
 				mergeObject(data, { "flags.polyglot.language": lang });
