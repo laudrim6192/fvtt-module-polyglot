@@ -23,20 +23,24 @@ class PolyGlot {
 			case "pf1":
 			case "pf2e":
 			case "sfrpg":
-			case "d35e":
+			case "sw5e":
+			case "D35E":
 				return CONFIG[game.system.id.toUpperCase()].languages;
 				break;
 			case "ose":
 				return Object.fromEntries(CONFIG.OSE.languages.map(l => [l, l]));
 				break;
 			case "wfrp4e":
-				const pack = game.packs.get("wfrp4e.skills") || game.packs.get("wfrp4e.basic");
+				const pack = game.packs.get("wfrp4e-core.skills") || game.packs.get("wfrp4e.basic");
 				const itemList = await pack.getIndex();
 				const langs = {};
 				for (let item of itemList) {
-					const match = item.name.match(/Language \((.+)\)/i);
-					if (match)
-						langs[match[1]] = match[1];
+					let myRegex = new RegExp( game.i18n.localize("POLYGLOT.WFRP4E.LanguageSkills")+'\\s*\\((.+)\\)', 'i' );
+					const match = item.name.match(myRegex);
+					if (match) {
+						let key = match[1].trim().toLowerCase();
+						langs[key] = key;
+					}
 				}
 				return langs;
 				break;
@@ -57,13 +61,25 @@ class PolyGlot {
 	static get defaultLanguage() {
 		const defaultLang = game.settings.get("polyglot", "defaultLanguage");
 		if (defaultLang) {
-			if (this.languages[defaultLang]) return defaultLang;
+			if (this.languages[defaultLang.toLowerCase()]) return defaultLang;
 			const inverted = invertObject(this.languages);
-			if (inverted[defaultLang]) return inverted[defaultLang];
+			if (inverted[defaultLang]) return inverted[defaultLang.toLowerCase()];
 		}
-		if (game.system.id === "wfrp4e") return "Reikspiel";
-		if (Object.keys(this.languages).includes("common")) return "Common";
-		if (game.system.id === "tormenta20") return "Comum";
+		switch (game.system.id) {
+			case "dnd5e":
+			case "dnd5eJP":
+				return game.i18n.localize("DND5E.LanguagesCommon");
+			case "ose":
+				return "Common";
+			case "sw5e":
+				return game.i18n.localize("SW5E.LanguagesBasic");
+			case "tormenta20":
+				return "Comum";
+			case "wfrp4e":
+				return "Reikspiel";
+		}
+		const keys = Object.keys(this.languages)
+		if (keys.includes("common") || keys.includes("Common")) return "Common";
 		return this.languages[0] || "";
 	}
 
@@ -109,9 +125,9 @@ class PolyGlot {
 		// Loop in reverse so most recent messages get refreshed first.
 		for (let i = messages.length - 1; i >= 0; i--) {
 			let message = messages[i]
-			if (message.data.type == CONST.CHAT_MESSAGE_TYPES.IC || this._isMessageTypeOOC(message.data.type)) {
+			if (message && (message.data.type == CONST.CHAT_MESSAGE_TYPES.IC || this._isMessageTypeOOC(message.data.type))) {
 				let lang = message.getFlag("polyglot", "language") || ""
-				let unknown = !this.known_languages.has(lang);
+				let unknown = lang != this.truespeech && !this.known_languages.has(lang) && !this.known_languages.has(this.comprehendLanguages);
 				if (game.user.isGM && !game.settings.get("polyglot", "runifyGM")) {
 					// Update globe color
 					const globe = ui.chat.element.find(`.message[data-message-id="${message.id}"] .message-metadata .polyglot-message-language i`)
@@ -141,10 +157,20 @@ class PolyGlot {
 				switch (game.system.id) {
 					case "wfrp4e":
 						for (let item of actor.data.items) {
+							let myRegex = new RegExp( game.i18n.localize("POLYGLOT.WFRP4E.LanguageSkills")+'\\s*\\((.+)\\)', 'i' );
+							const match = item.name.match( myRegex );
+							// adding only the descriptive language name, not "Language (XYZ)"
+							if (match)
+								this.known_languages.add(match[1].trim().toLowerCase());
+							}
+							break;	
+					case "swade":
+						for (let item of actor.data.items) {
+							const name = item?.flags?.babele?.originalName || item.name;							
 							const match = item.name.match(/Language \((.+)\)/i);
 							// adding only the descriptive language name, not "Language (XYZ)"
 							if (match)
-								this.known_languages.add(match[1]);
+								this.known_languages.add(match[1].trim().toLowerCase());
 						}
 						break;
 					case "ose":
@@ -178,18 +204,20 @@ class PolyGlot {
 		}
 		let options = ""
 		for (let lang of this.known_languages) {
+			if (lang != this.truespeech && lang === this.comprehendLanguages) continue;
 			let label = PolyGlot.languages[lang] || lang
 			options += `<option value="${lang}">${label}</option>`
 		}
 		const select = html.find(".polyglot-lang-select select");
 		const prevOption = select.val();
 		select.html($(options));
-		let selectedLanguage = this.lastSelection || prevOption || PolyGlot.defaultLanguage;
+		
+		let defaultLanguage = PolyGlot.defaultLanguage.toLowerCase();
+		let selectedLanguage = this.lastSelection || prevOption || defaultLanguage;
 		// known_languages is a Set, so it's weird to access its values
 		if (!this.known_languages.has(selectedLanguage))
-			selectedLanguage = PolyGlot.defaultLanguage;
-		if (!this.known_languages.has(selectedLanguage))
-			selectedLanguage = [...this.known_languages][0];
+			selectedLanguage = (this.known_languages.has(defaultLanguage) ? defaultLanguage : [...this.known_languages][0]);
+
 		select.val(selectedLanguage);
 	}
 
@@ -222,7 +250,8 @@ class PolyGlot {
 		if (!lang) return;
 		let metadata = html.find(".message-metadata")
 		let language = PolyGlot.languages[lang] || lang
-		const unknown = !this.known_languages.has(lang);
+		const known = this.known_languages.has(lang); //Actor knows the language rather than being affected by Comprehend Languages or Tongues
+		const unknown = lang != this.truespeech && !known && !this.known_languages.has(this.truespeech) && !this.known_languages.has(this.comprehendLanguages);
 		message.polyglot_unknown = unknown;
 		if (game.user.isGM && !game.settings.get("polyglot", "runifyGM"))
 			message.polyglot_unknown = false;
@@ -235,7 +264,12 @@ class PolyGlot {
 			$(content).empty().append(original);
 			
 			if (message.polyglot_force || !message.polyglot_unknown) {
-				$(content).append($('<div>').addClass('polyglot-translation-text').attr('title', game.i18n.localize("POLYGLOT.TranslatedFrom") + language).html(translation));
+				if (lang != this.truespeech && known && !game.settings.get('polyglot','hideTranslation')) {
+					$(content).append($('<div>').addClass('polyglot-translation-text').attr('title', game.i18n.localize("POLYGLOT.TranslatedFrom") + language).html(translation));
+				}
+				else {
+					$(content).append($('<div>').addClass('polyglot-translation-text').attr('title', game.i18n.localize("POLYGLOT.Translation")).html(translation));
+				}
 			}
 			else message.polyglot_unknown = true;
 		}
@@ -247,15 +281,17 @@ class PolyGlot {
 			message.polyglot_unknown = true;
 		}
 		
-		const color = unknown ? "red" : "green";
-		metadata.find(".polyglot-message-language").remove()
-		const title = game.user.isGM || !unknown ? `title="${language}"` : ""
-		let button = $(`<a class="button polyglot-message-language" ${title}>
-			<i class="fas fa-globe" style="color:${color}"></i>
-		</a>`)
-		metadata.append(button)
-		if (game.user.isGM) {
-			button.click(this._onGlobeClick.bind(this))
+		if (game.user.isGM || !game.settings.get('polyglot','hideTranslation')) {
+			const color = known ?	"green" : "red";
+			metadata.find(".polyglot-message-language").remove()
+			const title = game.user.isGM || !known ? `title="${language}"` : ""
+			let button = $(`<a class="button polyglot-message-language" ${title}>
+				<i class="fas fa-globe" style="color:${color}"></i>
+			</a>`)
+			metadata.append(button)
+			if (game.user.isGM) {
+				button.click(this._onGlobeClick.bind(this))
+			}
 		}
 	}
 
@@ -313,8 +349,11 @@ class PolyGlot {
 			case "sfrpg":
 				this.loadLanguages("starfinder");
 				break;
-			case "d35e":
-				this.loadLanguages("d35e");
+			case "D35E":
+				this.loadLanguages("D35E");
+				break;
+			case "sw5e":
+				this.loadLanguages("sw5e");
 				break;
 			default:
 				break;
@@ -328,6 +367,24 @@ class PolyGlot {
 			default: "",
 			type: String,
 			onChange: (value) => this.setCustomLanguages(value)
+		});
+		game.settings.register("polyglot", "comprehendLanguages", {
+			name: game.i18n.localize("POLYGLOT.ComprehendLanguagesTitle"),
+			hint: game.i18n.localize("POLYGLOT.ComprehendLanguagesHint"),
+			scope: "world",
+			config: true,
+			default: "",
+			type: String,
+			onChange: (value) => this.comprehendLanguages = value.trim().toLowerCase().replace(/ \'/g, "_")
+		});
+		game.settings.register("polyglot", "truespeech", {
+			name: game.i18n.localize("POLYGLOT.TruespeechTitle"),
+			hint: game.i18n.localize("POLYGLOT.TruespeechHint"),
+			scope: "world",
+			config: true,
+			default: "",
+			type: String,
+			onChange: (value) => this.truespeech = game.settings.get("polyglot","truespeech").trim().toLowerCase().replace(/ \'/g, "_")
 		});
 		game.settings.register("polyglot", "defaultLanguage", {
 			name: game.i18n.localize("POLYGLOT.DefaultLanguageTitle"),
@@ -344,7 +401,15 @@ class PolyGlot {
 			config: true,
 			default: true,
 			type: Boolean,
-			onChange: () => this.updateChatMessages()
+			onChange: () => location.reload()
+		});
+		game.settings.register("polyglot", "toggleRuneText", {
+			name: game.i18n.localize("POLYGLOT.toggleRuneTextTitle"),
+			hint: game.i18n.localize("POLYGLOT.toggleRuneTextHint"),
+			scope: "client",
+			config: true,
+			default: true,
+			type: Boolean
 		});
 		game.settings.register("polyglot", "useUniqueSalt", {
 			name: game.i18n.localize("POLYGLOT.RandomizeRunesTitle"),
@@ -352,7 +417,8 @@ class PolyGlot {
 			scope: "world",
 			config: true,
 			default: false,
-			type: Boolean
+			type: Boolean,
+			onChange: () => location.reload()
 		});
 		game.settings.register("polyglot", "exportFonts", {
 			name: game.i18n.localize("POLYGLOT.ExportFontsTitle"),
@@ -370,7 +436,15 @@ class PolyGlot {
 			config: true,
 			default: true,
 			type: Boolean,
-			onChange: () => this.updateChatMessages()
+			onChange: () => location.reload()
+		});
+		game.settings.register("polyglot", "hideTranslation", {
+			name: game.i18n.localize("POLYGLOT.HideTranslationTitle"),
+			hint: game.i18n.localize("POLYGLOT.HideTranslationHint"),
+			scope: "world",
+			config: true,
+			default: false,
+			type: Boolean,
 		});
 		// Adjust the bubble dimensions so the message is displayed correctly
 		ChatBubbles.prototype._getMessageDimensions = (message) => {
@@ -396,9 +470,12 @@ class PolyGlot {
 			onChange: (value) => this.allowOOC = value
 		});
 		this.allowOOC = game.settings.get("polyglot","allowOOC");
+		this.comprehendLanguages = game.settings.get("polyglot","comprehendLanguages").trim().toLowerCase().replace(/ \'/g, "_");
+		this.truespeech = game.settings.get("polyglot","truespeech").trim().toLowerCase().replace(/ \'/g, "_");
 	}
 	ready() {
 		this.updateConfigFonts();
+		this.setCustomLanguages(game.settings.get("polyglot","customLanguages"));
 	}
 	updateConfigFonts() {
 		// Register fonts so they are available to other elements (such as Drawings)
@@ -412,11 +489,12 @@ class PolyGlot {
 
 	async setCustomLanguages(languages) {
 		PolyGlot.languages = await PolyGlot.getLanguages();
-		if (languages === "") return;
-		for (let lang of languages.split(",")) {
-			lang = lang.trim();
-			const key = lang.toLowerCase().replace(/ \'/g, "_");
-			PolyGlot.languages[key] = lang;
+		if (languages != "") {
+			for (let lang of languages.split(",")) {
+				lang = lang.trim();
+				const key = lang.toLowerCase().replace(/ \'/g, "_");
+				PolyGlot.languages[key] = lang;
+			}
 		}
 		this.updateUserLanguages(ui.chat.element);
 	}
@@ -436,6 +514,14 @@ class PolyGlot {
 				}
 			};
 		});
+		if (this.truespeech) {
+			const truespeechIndex = languages.findIndex(element => element.attributes["data-language"] == this.truespeech);
+			languages.splice(truespeechIndex, 1);
+		}
+		if (this.comprehendLanguages && this.comprehendLanguages != this.truespeech) {
+			const comprehendLanguagesIndex = languages.findIndex(element => element.attributes["data-language"] == this.comprehendLanguages);
+			languages.splice(comprehendLanguagesIndex, 1);
+		}
 		sheet[methodName] = function(target, editorOptions, initialContent) {
 			editorOptions.style_formats = [
 				...CONFIG.TinyMCE.style_formats,
@@ -499,7 +585,8 @@ class PolyGlot {
 			let runes = false;
 			const texts = [];
 			const styles = [];
-			const toggleString = "<a class='polyglot-button' title='" + game.i18n.localize("POLYGLOT.ToggleRunes") + "'><i class='fas fa-unlink'></i> "+ game.i18n.localize("POLYGLOT.Runes") + "</a>";
+			const runesText = game.settings.get("polyglot", "toggleRuneText") ? game.i18n.localize("POLYGLOT.Runes") : "";
+			const toggleString = "<a class='polyglot-button' title='" + game.i18n.localize("POLYGLOT.ToggleRunes") + "'><i class='fas fa-unlink'></i> "+ runesText + "</a>";
 			const toggleButton = $(toggleString);
 			toggleButton.click(ev => {
 				ev.preventDefault();
@@ -537,7 +624,7 @@ class PolyGlot {
 		for (let span of spans.toArray()) {
 			const lang = span.dataset.language;
 			if (!lang) continue;
-			if (!this.known_languages.has(lang)) {
+			if (lang != this.truespeech && !this.known_languages.has(lang) && !this.known_languages.has(this.comprehendLanguages)) {
 				span.title = "????"
 				span.textContent = this.scrambleString(span.textContent,game.settings.get('polyglot','useUniqueSalt') ? journalSheet._id : lang)
 				span.style.font = this._getFontStyle(lang)
@@ -550,7 +637,7 @@ class PolyGlot {
 		if (message.data.type == CONST.CHAT_MESSAGE_TYPES.IC) {
 			let lang = message.getFlag("polyglot", "language") || ""
 			if (lang != "") {
-				const unknown = !this.known_languages.has(lang);
+				const unknown = lang != this.truespeech && !this.known_languages.has(lang) && !this.known_languages.has(this.comprehendLanguages);
 				message.polyglot_unknown = unknown;
 				if (game.user.isGM && !game.settings.get("polyglot", "runifyGM"))
 					message.polyglot_unknown = false;
@@ -571,7 +658,7 @@ class PolyGlot {
 
 		let lang = message.getFlag("polyglot", "language") || ""
 		if (lang != "") {
-			const unknown = !this.known_languages.has(lang);
+			const unknown = lang != this.truespeech && !this.known_languages.has(lang) && !this.known_languages.has(this.comprehendLanguages);
 			message.polyglot_unknown = unknown;
 			if (game.user.isGM && !game.settings.get("polyglot", "runifyGM"))
 				message.polyglot_unknown = false;
